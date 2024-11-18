@@ -2,6 +2,7 @@ from fastapi import APIRouter
 from house_data_request import HouseData
 import pandas as pd
 from xgboost import XGBRegressor
+import numpy as np
 
 router = APIRouter(prefix="/model")
 
@@ -10,27 +11,49 @@ model.load_model("model.json")
 test_data = pd.read_csv("test_data.csv")
 
 
+def transform_feature(data, feature, transform="log"):
+    if transform == "log":
+        data[feature] = np.log(data[feature])
+    elif transform == "sqrt":
+        data[feature] = np.sqrt(data[feature])
+    else:
+        raise ValueError("Invalid transform")
+
+
+def transform_data(data):
+    columns = ['MedInc', 'AveOccup', 'Latitude', 'Longitude', 'point_location', 'bedrooms_per_room', 'HouseAge']
+    high_skew_columns = ["AveRooms", "AveBedrms", "AveOccup"]
+    moderate_skew_columns = ["MedInc"]
+
+    for feature in high_skew_columns:
+        transform_feature(data, feature)
+
+    for feature in moderate_skew_columns:
+        transform_feature(data, feature, "sqrt")
+
+    data["bedrooms_per_room"] = data["AveBedrms"] / data["AveRooms"]
+    data["point_location"] = data["Latitude"] + data["Longitude"]
+    data = data[columns]
+    return data
+
+
 @router.post("/predict")
 def predict(data: HouseData | list[HouseData]):
-    columns = ['MedInc', 'AveOccup', 'Latitude', 'Longitude', 'point_location', 'bedrooms_per_room', 'HouseAge']
 
     if isinstance(data, list):
-        data = [d.dict() for d in data]
+        data = [d.model_dump() for d in data]
         data = pd.DataFrame(data)
-        data["bedrooms_per_room"] = data["AveBedrms"] / data["AveRooms"]
-        data["point_location"] = data["Latitude"] + data["Longitude"]
-        data = data[columns]
+        data = transform_data(data)
+
         predictions = model.predict(data)
         return predictions.tolist()
 
     entry = data.model_dump()
-    entry["bedrooms_per_room"] = entry["AveBedrms"] / entry["AveRooms"]
-    entry["point_location"] = entry["Latitude"] + entry["Longitude"]
 
-    X = pd.DataFrame(entry, index=[0])
-    X = X[columns]
+    data = pd.DataFrame(entry, index=[0])
+    data = transform_data(data)
 
-    prediction = model.predict(X)[0]
+    prediction = model.predict(data)[0]
     return float(prediction)
 
 
